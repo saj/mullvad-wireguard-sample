@@ -50,13 +50,154 @@ from operator import attrgetter
 ichain = itertools.chain.from_iterable
 
 
+class Args:
+
+    @classmethod
+    def parse(cls, argv=None):
+        if argv is None:
+            argv = sys.argv
+
+        parser = argparse.ArgumentParser(
+            formatter_class=cls._ArgparseFormatter,
+            description=__doc__)
+        parser.add_argument(
+            "src-dir",
+            help="Directory from which upstream Mullvad .conf files are read.")
+        parser.add_argument(
+            "dst-dir",
+            help="Directory to which output is written.  Without -f, it is an "
+            "error if the directory exists.")
+        parser.add_argument("-v", "--verbose", action="store_true")
+        parser.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
+        parser.add_argument(
+            "-f", "--force", action="store_true",
+            help="Proceed even if dst-dir is found to exist.  Any existing "
+            "files in the destination directory are merged with new output.")
+        parser.add_argument(
+            "-n", type=int, default=10,
+            help="Maximum number of configuration files written to dst-dir.  "
+            "This limit is imposed last, after all --select-* filters.  "
+            "Specify a non-positive value to disable this limit.")
+        parser.add_argument(
+            "--seed", type=int, default=0,
+            help="Deterministic seed for the PRNG.  By default, every "
+            "invocation produces a unique sample.")
+        region_group = parser.add_mutually_exclusive_group()
+        region_group.add_argument(
+            "--select-region", dest="select_regions", type=cls._region_count,
+            action="append", default=[], metavar="REGION-COUNT",
+            help="Select servers from a specific region.  Implicitly excludes "
+            "all other servers.  May be supplied more than once:  a server is "
+            "selected if its region matches any REGION.  REGION-COUNT must be "
+            "of form RR:N where RR is a Mullvad region code -- usually an ISO "
+            "3166-1 alpha-2 code -- and N is a positive integer that specifies "
+            "the maximum number of servers to select from that region.  "
+            "e.g.: us:3")
+        region_group.add_argument(
+            "--reject-region", dest="reject_regions", type=cls._region,
+            action="append", default=[], metavar="REGION",
+            help="Reject all servers from a specific region.  May be supplied "
+            "more than once.")
+        parser.add_argument(
+            "--prefer-server", dest="prefer_servers", type=cls._server_id,
+            action="append", default=[], metavar="SERVERID",
+            help="Assign a higher priority to a server when sampling.  Targets "
+            "are more likely to be selected.  May be supplied more than once.  "
+            "SERVERID must be of form RRNN, where RR is a Mullvad region code "
+            "and NN is an ordinal instance index.  Leading zeroes in NN are "
+            "permitted but are not significant.  e.g.: us080")
+        parser.add_argument(
+            "--shun-server", dest="shun_servers", type=cls._server_id,
+            action="append", default=[], metavar="SERVERID",
+            help="Assign a lower priority to a server when sampling.  Targets "
+            "are less likely to be selected.  May be supplied more than once.")
+        parser.add_argument(
+            "--basename-prefix", default=DEFAULT_BASENAME_PREFIX,
+            metavar="PREFIX",
+            help="Common prefix for all generated file names.")
+        parser.add_argument(
+            "--rename", dest="renames", type=cls._server_id_name,
+            action="append", default=[], metavar="SERVERID-NAME",
+            help="Rename the configuration file for a given SERVERID.  May be "
+            "supplied more than once, each flag with a different SERVERID.  "
+            "SERVERID-NAME must be of form RRNN:NAME where RRNN is as "
+            "described above, and NAME is the desired file name.  NAME may be "
+            "composed of any alpha-numeric character, the hyphen (-), or the "
+            "underscore (_).  PREFIX is implicitly prepended (and '.conf' "
+            "implicitly appended) to form the complete name of the generated "
+            "file.  e.g.: au01:au001-syd-intergrid")
+        parser.add_argument(
+            "--cfg-dns", metavar="DNSADDR",
+            help="Override Interface.DNS from the source WireGuard "
+            "configuration with an alternative constant value.  Value should "
+            "be a comma separated list of IP addresses.")
+        parser.add_argument(
+            "--cfg-private-key", metavar="PRIVATEKEY",
+            help="Override Interface.PrivateKey from the source WireGuard "
+            "configuration with an alternative constant value.  Value should "
+            "be a base64 encoded WireGuard private key.")
+        args = parser.parse_args(argv[1:])
+
+        select_regions_dupes = find_dupes([rc.region for rc in args.select_regions])
+        if select_regions_dupes:
+            parser.error(
+                "--select-regions: duplicate regions: {}"
+                .format(cjoin(sorted(select_regions_dupes))))
+
+        prefer_shun_conflicts = set(args.prefer_servers) & set(args.shun_servers)
+        if prefer_shun_conflicts:
+            parser.error(
+                "server IDs cannot be preferred and shunned simultaneously: {}"
+                .format(cjoin(sorted(str(sid) for sid in prefer_shun_conflicts))))
+
+        renames_dupes = find_dupes([sidn.sid for sidn in args.renames])
+        if renames_dupes:
+            parser.error(
+                "--rename: duplicate server IDs: {}"
+                .format(cjoin(str(sid) for sid in sorted(renames_dupes))))
+
+        return cls(args)
+
+    def __init__(self, args):
+        self._args = args
+
+    def __getattr__(self, name):
+        return getattr(self._args, name)
+
+    @classmethod
+    def _region(cls, s):
+        return cls._parse_as_type(Region, s)
+
+    @classmethod
+    def _region_count(cls, s):
+        return cls._parse_as_type(RegionCount, s)
+
+    @classmethod
+    def _server_id(cls, s):
+        return cls._parse_as_type(ServerID, s)
+
+    @classmethod
+    def _server_id_name(cls, s):
+        return cls._parse_as_type(ServerIDName, s)
+
+    @staticmethod
+    def _parse_as_type(t, s):
+        try:
+            return t.parse(s)
+        except (TypeError, ValueError) as exc:
+            raise argparse.ArgumentTypeError(str(exc))
+
+    class _ArgparseFormatter(argparse.RawDescriptionHelpFormatter,
+                             argparse.ArgumentDefaultsHelpFormatter):
+        pass
+
+
 DEFAULT_BASENAME_PREFIX = "mlvd-"
 
 # Higher numeric values are given preference.  Absolute values not significant.
 PRIO_SHUN    = 1
 PRIO_DEFAULT = 2
 PRIO_PREFER  = 3
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -339,148 +480,6 @@ def find_configuration(src_dir):
         if not c:
             continue
         yield c
-
-
-class Args:
-
-    def __init__(self, args):
-        self._args = args
-
-    def __getattr__(self, name):
-        return getattr(self._args, name)
-
-    @classmethod
-    def parse(cls, argv=None):
-        if argv is None:
-            argv = sys.argv
-
-        parser = argparse.ArgumentParser(
-            formatter_class=cls._ArgparseFormatter,
-            description=__doc__)
-        parser.add_argument(
-            "src-dir",
-            help="Directory from which upstream Mullvad .conf files are read.")
-        parser.add_argument(
-            "dst-dir",
-            help="Directory to which output is written.  Without -f, it is an "
-            "error if the directory exists.")
-        parser.add_argument("-v", "--verbose", action="store_true")
-        parser.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
-        parser.add_argument(
-            "-f", "--force", action="store_true",
-            help="Proceed even if dst-dir is found to exist.  Any existing "
-            "files in the destination directory are merged with new output.")
-        parser.add_argument(
-            "-n", type=int, default=10,
-            help="Maximum number of configuration files written to dst-dir.  "
-            "This limit is imposed last, after all --select-* filters.  "
-            "Specify a non-positive value to disable this limit.")
-        parser.add_argument(
-            "--seed", type=int, default=0,
-            help="Deterministic seed for the PRNG.  By default, every "
-            "invocation produces a unique sample.")
-        region_group = parser.add_mutually_exclusive_group()
-        region_group.add_argument(
-            "--select-region", dest="select_regions", type=cls._region_count,
-            action="append", default=[], metavar="REGION-COUNT",
-            help="Select servers from a specific region.  Implicitly excludes "
-            "all other servers.  May be supplied more than once:  a server is "
-            "selected if its region matches any REGION.  REGION-COUNT must be "
-            "of form RR:N where RR is a Mullvad region code -- usually an ISO "
-            "3166-1 alpha-2 code -- and N is a positive integer that specifies "
-            "the maximum number of servers to select from that region.  "
-            "e.g.: us:3")
-        region_group.add_argument(
-            "--reject-region", dest="reject_regions", type=cls._region,
-            action="append", default=[], metavar="REGION",
-            help="Reject all servers from a specific region.  May be supplied "
-            "more than once.")
-        parser.add_argument(
-            "--prefer-server", dest="prefer_servers", type=cls._server_id,
-            action="append", default=[], metavar="SERVERID",
-            help="Assign a higher priority to a server when sampling.  Targets "
-            "are more likely to be selected.  May be supplied more than once.  "
-            "SERVERID must be of form RRNN, where RR is a Mullvad region code "
-            "and NN is an ordinal instance index.  Leading zeroes in NN are "
-            "permitted but are not significant.  e.g.: us080")
-        parser.add_argument(
-            "--shun-server", dest="shun_servers", type=cls._server_id,
-            action="append", default=[], metavar="SERVERID",
-            help="Assign a lower priority to a server when sampling.  Targets "
-            "are less likely to be selected.  May be supplied more than once.")
-        parser.add_argument(
-            "--basename-prefix", default=DEFAULT_BASENAME_PREFIX,
-            metavar="PREFIX",
-            help="Common prefix for all generated file names.")
-        parser.add_argument(
-            "--rename", dest="renames", type=cls._server_id_name,
-            action="append", default=[], metavar="SERVERID-NAME",
-            help="Rename the configuration file for a given SERVERID.  May be "
-            "supplied more than once, each flag with a different SERVERID.  "
-            "SERVERID-NAME must be of form RRNN:NAME where RRNN is as "
-            "described above, and NAME is the desired file name.  NAME may be "
-            "composed of any alpha-numeric character, the hyphen (-), or the "
-            "underscore (_).  PREFIX is implicitly prepended (and '.conf' "
-            "implicitly appended) to form the complete name of the generated "
-            "file.  e.g.: au01:au001-syd-intergrid")
-        parser.add_argument(
-            "--cfg-dns", metavar="DNSADDR",
-            help="Override Interface.DNS from the source WireGuard "
-            "configuration with an alternative constant value.  Value should "
-            "be a comma separated list of IP addresses.")
-        parser.add_argument(
-            "--cfg-private-key", metavar="PRIVATEKEY",
-            help="Override Interface.PrivateKey from the source WireGuard "
-            "configuration with an alternative constant value.  Value should "
-            "be a base64 encoded WireGuard private key.")
-        args = parser.parse_args(argv[1:])
-
-        select_regions_dupes = find_dupes([rc.region for rc in args.select_regions])
-        if select_regions_dupes:
-            parser.error(
-                "--select-regions: duplicate regions: {}"
-                .format(cjoin(sorted(select_regions_dupes))))
-
-        prefer_shun_conflicts = set(args.prefer_servers) & set(args.shun_servers)
-        if prefer_shun_conflicts:
-            parser.error(
-                "server IDs cannot be preferred and shunned simultaneously: {}"
-                .format(cjoin(sorted(str(sid) for sid in prefer_shun_conflicts))))
-
-        renames_dupes = find_dupes([sidn.sid for sidn in args.renames])
-        if renames_dupes:
-            parser.error(
-                "--rename: duplicate server IDs: {}"
-                .format(cjoin(str(sid) for sid in sorted(renames_dupes))))
-
-        return cls(args)
-
-    @classmethod
-    def _region(cls, s):
-        return cls._parse_as_type(Region, s)
-
-    @classmethod
-    def _region_count(cls, s):
-        return cls._parse_as_type(RegionCount, s)
-
-    @classmethod
-    def _server_id(cls, s):
-        return cls._parse_as_type(ServerID, s)
-
-    @classmethod
-    def _server_id_name(cls, s):
-        return cls._parse_as_type(ServerIDName, s)
-
-    @staticmethod
-    def _parse_as_type(t, s):
-        try:
-            return t.parse(s)
-        except (TypeError, ValueError) as exc:
-            raise argparse.ArgumentTypeError(str(exc))
-
-    class _ArgparseFormatter(argparse.RawDescriptionHelpFormatter,
-                             argparse.ArgumentDefaultsHelpFormatter):
-        pass
 
 
 def main(argv=None):
