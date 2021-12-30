@@ -189,6 +189,7 @@ class Configuration:
 
     def read(self):
         c = configparser.ConfigParser()
+        c.optionxform = str
         c.read(self.path)
         return c
 
