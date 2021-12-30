@@ -221,16 +221,16 @@ class PriorityCache:
 @dataclass
 class TransformTemplate:
     basename_prefix: str = ""
+    private_key:     str = ""
     dns_servers:     str = ""
 
     def default(self):
         def transform(cfg):
             data = cfg.read()
+            if self.private_key:
+                dict_deep_set(data, ("Interface", "PrivateKey"), self.private_key)
             if self.dns_servers:
-                if "Interface" not in data:
-                    data["Interface"] = {}
-                data["Interface"]["DNS"] = self.dns_servers
-
+                dict_deep_set(data, ("Interface", "DNS"), self.dns_servers)
             return self._basename(cfg), data
         return transform
 
@@ -255,6 +255,17 @@ def compose(initial, *funcs):
     for f in funcs:
         v = f(v)
     return v
+
+
+def dict_deep_set(d, keys, value):
+    *head, tail = keys
+    for k in head:
+        try:
+            d = d[k]
+        except KeyError:
+            d[k] = {}
+            d = d[k]
+    d[tail] = value
 
 
 def find_dupes(iterable):
@@ -413,8 +424,14 @@ class Args:
             "file.  e.g.: au01:au001-syd-intergrid")
         parser.add_argument(
             "--cfg-dns", metavar="DNSADDR",
-            help="Optionally override the list of DNS servers in the WireGuard "
-            "configuration with a comma separated list of IP addresses.")
+            help="Override Interface.DNS from the source WireGuard "
+            "configuration with an alternative constant value.  Value should "
+            "be a comma separated list of IP addresses.")
+        parser.add_argument(
+            "--cfg-private-key", metavar="PRIVATEKEY",
+            help="Override Interface.PrivateKey from the source WireGuard "
+            "configuration with an alternative constant value.  Value should "
+            "be a base64 encoded WireGuard private key.")
         args = parser.parse_args(argv[1:])
 
         select_regions_dupes = find_dupes([rc.region for rc in args.select_regions])
@@ -467,8 +484,8 @@ class Args:
 
 def main(argv=None):
 
-	# pylint: disable=too-many-branches
-	# pylint: disable=too-many-locals
+    # pylint: disable=too-many-branches
+    # pylint: disable=too-many-locals
 
     args = Args.parse(argv)
 
@@ -504,6 +521,8 @@ def main(argv=None):
     TRANSFORMS.basename_prefix = args.basename_prefix
     if args.cfg_dns:
         TRANSFORMS.dns_servers = args.cfg_dns
+    if args.cfg_private_key:
+        TRANSFORMS.private_key = args.cfg_private_key
     for rename in args.renames:
         transforms[rename.sid] = TRANSFORMS.rename(rename.name)
 
