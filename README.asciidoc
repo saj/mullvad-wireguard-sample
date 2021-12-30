@@ -1,0 +1,41 @@
+Randomly sample files from the Mullvad WireGuard configuration generator.
+
+I wrote this program because I wanted to preload several tunnel configurations into each one of my devices but was overwhelmed by choice.  Which WireGuard servers should I use?  Hundreds of servers are available!  This program makes that choice on my behalf.  Its decisions are guided mostly by random die roll and, optionally, by gentle nudging (away from, or towards, particular regions or servers).  The program accepts a full set of Mullvad WireGuard configuration files as input, then plucks out a handful of winners for output.  The program may be easily reinvoked at a later time as servers are added to, and removed from, the upstream pool.
+
+Refer to the link:mlvd-sample[source] (or `--help`) for an introduction and for usage information.  Examples are provided -- in link:example-five-blind-eyes[`example-five-blind-eyes`] and link:example-en[`example-en`] -- to demonstrate some common usage scenarios.  The simplest invocation is as follows:
+
+----
+% ls -1 src/ | wc -l
+     420
+
+% ls -1 src | head -n 3
+mullvad-at4.conf
+mullvad-at5.conf
+mullvad-at6.conf
+
+# Select ten servers at random:
+% mlvd-sample src dst1
+
+# Select another ten servers at random:
+% mlvd-sample src dst2
+
+# Directories dst1 and dst2 now contain ten .conf files each.
+
+% ls -1 dst1 | paste - -
+mlvd-ca013.conf mlvd-de010.conf
+mlvd-ie001.conf mlvd-jp009.conf
+mlvd-us017.conf mlvd-us064.conf
+mlvd-us087.conf mlvd-us193.conf
+mlvd-us228.conf mlvd-us233.conf
+
+% ls -1 dst2 | paste - -
+mlvd-de015.conf mlvd-gb015.conf
+mlvd-it004.conf mlvd-ro006.conf
+mlvd-us106.conf mlvd-us118.conf
+mlvd-us135.conf mlvd-us158.conf
+mlvd-us196.conf mlvd-us240.conf
+----
+
+No compatibility promise extends to anything in this repository.
+
+This author and this work have no affiliation with Mullvad VPN AB nor Amagicom AB.

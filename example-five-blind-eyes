@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+
+# Avoid servers hosted in states that are party to a certain Western
+# intelligence gathering alliance.
+
+# pylint: disable=invalid-name
+# pylint: disable=missing-function-docstring
+# pylint: disable=missing-module-docstring
+
+import itertools
+import os
+import shlex
+import sys
+
+from libexample import import_src, rm_fr
+
+ichain = itertools.chain.from_iterable
+
+
+PROG = "./mlvd-sample"
+
+sampler  = import_src("sampler", PROG)
+ServerID = sampler.ServerID
+
+argv = [
+    PROG, "-v",
+    *ichain(["--reject-region", r] for r in ["au", "ca", "gb", "nz", "us"]),
+    "src", "dst"]
+
+print(" ".join(shlex.quote(a) for a in argv), file=sys.stderr)
+sys.stderr.flush()
+
+rm_fr("dst")
+os.execv(PROG, argv)

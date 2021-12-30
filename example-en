@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+
+# Select a handful of servers from English-speaking countries.
+
+# pylint: disable=invalid-name
+# pylint: disable=missing-function-docstring
+# pylint: disable=missing-module-docstring
+
+import itertools
+import os
+import shlex
+import sys
+
+from libexample import import_src, rm_fr
+
+ichain = itertools.chain.from_iterable
+
+
+PROG = "./mlvd-sample"
+
+sampler  = import_src("sampler", PROG)
+ServerID = sampler.ServerID
+
+argv = [
+    PROG, "-v",
+
+    "--select-region", "au:4",
+    *ichain(["--select-region", f"{r}:2"] for r in ["ca", "gb", "nz", "us"]),
+
+    # M247 servers seem to impart higher latency.
+    *ichain(["--shun-server", f"au{i}"] for i in range(8, 15)),
+
+    # Assign memorable tunnel names.
+    *ichain(["--rename", f"{sid}:{ServerID.parse(sid)}{sfx}"]
+            for sid, sfx in
+            [("au1", "-syd-intergrid"),
+             ("au2", "-syd-intergrid"),
+             ("au3", "-mel-intergrid"),
+             ("au4", "-mel-intergrid"),
+             ("nz1", "-akl-intergrid"),
+             ("nz2", "-akl-intergrid")]),
+    *ichain(["--rename", f"{sid}:{ServerID.parse(sid)}-syd-m247"]
+            for sid in (f"au{i}" for i in range(8, 15))),
+
+    "src", "dst"]
+
+print(" ".join(shlex.quote(a) for a in argv), file=sys.stderr)
+sys.stderr.flush()
+
+rm_fr("dst")
+os.execv(PROG, argv)
