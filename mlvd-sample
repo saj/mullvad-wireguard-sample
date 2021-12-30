@@ -570,7 +570,7 @@ def main(argv=None):
     for psid in psids:
         basename, data = transform(cfgs[psid.sid])
         path = os.path.join(getattr(args, "dst-dir"), basename)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf8") as f:
             data.write(f)
 
 
