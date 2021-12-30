@@ -2,7 +2,7 @@
 # pylint: disable=missing-function-docstring
 # pylint: disable=missing-module-docstring
 
-import os
+import shutil
 import sys
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -19,6 +19,6 @@ def import_src(name, path):
 
 def rm_fr(path):
     try:
-        os.removedirs(path)
+        shutil.rmtree(path)
     except FileNotFoundError:
         pass
