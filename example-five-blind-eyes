@@ -12,15 +12,12 @@ import os
 import shlex
 import sys
 
-from libexample import import_src, rm_fr
+from libexample import rm_fr
 
 ichain = itertools.chain.from_iterable
 
 
 PROG = "./mlvd-sample"
-
-sampler  = import_src("sampler", PROG)
-ServerID = sampler.ServerID
 
 argv = [
     PROG, "-v",

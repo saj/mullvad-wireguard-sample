@@ -521,7 +521,7 @@ def main(argv=None):
                     partial(group_all, groupers),
                     sorted)
 
-    paths = []  # of (sid, path) tuples
+    paths = []  # of (ServerID, path) tuples
     for psid in psids:
         path, _ = transform(cfgs[psid.sid])
         paths.append((psid.sid, path))
