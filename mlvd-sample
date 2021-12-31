@@ -127,6 +127,11 @@ class Args:
             "implicitly appended) to form the complete name of the generated "
             "file.  e.g.: au01:au001-syd-intergrid")
         parser.add_argument(
+            "--cfg-address", metavar="ADDR",
+            help="Override Interface.Address from the source WireGuard "
+            "configuration with an alternative constant value.  Value should "
+            "be a comma separated list of IP addresses with prefix length.")
+        parser.add_argument(
             "--cfg-dns", metavar="DNSADDR",
             help="Override Interface.DNS from the source WireGuard "
             "configuration with an alternative constant value.  Value should "
@@ -363,16 +368,19 @@ class PriorityCache:
 @dataclass
 class TransformTemplate:
     basename_prefix: str = ""
-    private_key:     str = ""
+    address:         str = ""
     dns_servers:     str = ""
+    private_key:     str = ""
 
     def default(self):
         def transform(cfg):
             data = cfg.read()
-            if self.private_key:
-                dict_deep_set(data, ("Interface", "PrivateKey"), self.private_key)
+            if self.address:
+                dict_deep_set(data, ("Interface", "Address"), self.address)
             if self.dns_servers:
                 dict_deep_set(data, ("Interface", "DNS"), self.dns_servers)
+            if self.private_key:
+                dict_deep_set(data, ("Interface", "PrivateKey"), self.private_key)
             return self._basename(cfg), data
         return transform
 
@@ -519,6 +527,8 @@ def main(argv=None):
             lambda psid: 0,  # no-op sort/group key
             sample_by_priority(args.n)))
     TRANSFORMS.basename_prefix = args.basename_prefix
+    if args.cfg_address:
+        TRANSFORMS.address = args.cfg_address
     if args.cfg_dns:
         TRANSFORMS.dns_servers = args.cfg_dns
     if args.cfg_private_key:
