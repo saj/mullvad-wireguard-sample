@@ -27,7 +27,7 @@ argv = [
     "--select-region", "au:4",
     *ichain(["--select-region", f"{r}:2"] for r in ["ca", "gb", "nz", "us"]),
 
-    # M247 servers seem to impart higher latency.
+    # Servers on M247 machines seem to impart higher latency.
     *ichain(["--shun-server", f"au{i}"] for i in range(8, 15)),
 
     # Assign memorable tunnel names.

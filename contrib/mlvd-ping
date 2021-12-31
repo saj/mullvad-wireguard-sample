@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+
+"""
+Ping all Mullvad WireGuard servers and summarise observed latency.
+
+Targets are discovered by parsing a directory of WireGuard configuration files.
+(The same source directory may be reused across mlvd-sample and this program.)
+Network round-trip time is measured using ICMP echo requests and replies.
+
+RTT is printed in units of fractional milliseconds.  This figure represents the
+median latency observed over several ping-pong exchanges (see --count).  'down'
+is subtituted in place of an RTT figure if a target fails to respond.
+
+Example:
+
+    % contrib/mlvd-ping src
+       8.8	89.44.10.66	mullvad-au8.conf
+       9.0	89.44.10.114	mullvad-au10.conf
+    ...
+     347.8	178.175.131.98	mullvad-md1.conf
+     349.5	86.106.74.98	mullvad-hu5.conf
+
+Requires Python 3.7 or later and icmplib.
+https://pypi.org/project/icmplib/
+"""
+
+# pylint: disable=invalid-name
+# pylint: disable=missing-class-docstring
+# pylint: disable=missing-function-docstring
+
+import argparse
+import configparser
+import math
+import os.path
+import sys
+from dataclasses import dataclass
+from enum import IntEnum
+from operator import itemgetter
+
+import icmplib
+
+
+class Args:
+
+    def __init__(self, args):
+        self._args = args
+
+    def __getattr__(self, name):
+        return getattr(self._args, name)
+
+    @classmethod
+    def parse(cls, argv=None):
+        if argv is None:
+            argv = sys.argv
+
+        parser = argparse.ArgumentParser(
+            formatter_class=cls._ArgparseFormatter,
+            description=__doc__)
+        parser.add_argument(
+            "src-dir",
+            help="Directory from which upstream Mullvad .conf files are read.")
+        parser.add_argument(
+            "-C", "--concurrency", type=cls._positive_int, default=50,
+            help="Maximum number of concurrent ping-pong protocol exchanges.")
+        parser.add_argument(
+            "-c", "--count", type=cls._natural_int, default=5,
+            help="Number of pings to send to each target.")
+        parser.add_argument(
+            "-i", "--interval", type=cls._positive_float, default=0.1,
+            help="Interval between adjacent ping sends in seconds.")
+        parser.add_argument(
+            "-t", "--timeout", type=cls._positive_float, default=2.5,
+            help="ICMP echo reply timeout in seconds.")
+        args = parser.parse_args(argv[1:])
+        return cls(args)
+
+    def _name(new_name):  # decorator - do not call as not a method
+        # argparse consumes __name__ when formatting error messages.
+
+        # pylint: disable=no-self-argument
+        # pylint: disable=non-str-assignment-to-dunder-name
+
+        def dec(f):
+            f.__name__ = new_name
+            return f
+        return dec
+
+    @staticmethod
+    @_name("natural")
+    def _natural_int(v):
+        v = int(v)
+        if v < 0:
+            raise ValueError("expected a non-negative integer: {v!r}")
+        return v
+
+    @staticmethod
+    @_name("positive integer")
+    def _positive_int(v):
+        v = int(v)
+        if v <= 0:
+            raise ValueError("expected a positive integer: {v!r}")
+        return v
+
+    @staticmethod
+    @_name("positive float")
+    def _positive_float(v):
+        v = float(v)
+        if v <= 0:
+            raise ValueError("expected a positive float: {v!r}")
+        if math.isinf(v) or math.isnan(v):
+            raise ValueError("cannot accept extreme floating point value: {v!r}")
+        return v
+
+    class _ArgparseFormatter(argparse.RawDescriptionHelpFormatter,
+                             argparse.ArgumentDefaultsHelpFormatter):
+        pass
+
+
+@dataclass(frozen=True)
+class Configuration:
+    dir:  str
+    name: str
+
+    @classmethod
+    def match(cls, path):
+        head, tail = os.path.split(path)
+        if not tail.endswith(".conf"):
+            return None
+        return cls(dir=head, name=tail)
+
+    def read(self):
+        c = configparser.ConfigParser()
+        c.read(os.path.join(self.dir, self.name))
+        return c
+
+
+class Status(IntEnum):
+    # arranged for ascending sort
+    UP   = 0
+    DOWN = 1
+
+    @classmethod
+    def from_bool(cls, up):
+        return cls.UP if up else cls.DOWN
+
+
+@dataclass(frozen=True, order=True)
+class Result:
+    status: Status
+    rtt:    float
+
+    def __str__(self):
+        if self.status == Status.UP:
+            return f"{self.rtt:>6.1f}"
+        return "down"
+
+
+def find_configuration(src_dir):
+    for name in os.listdir(src_dir):
+        src_path = os.path.join(src_dir, name)
+        if not os.path.isfile(src_path):
+            continue
+        c = Configuration.match(src_path)
+        if not c:
+            continue
+        yield c
+
+
+def read_configuration(src_dir):
+    for cfg in find_configuration(src_dir):
+        data = cfg.read()
+        try:
+            udp_addr = data["Peer"]["Endpoint"]
+        except KeyError:
+            continue
+        ip_addr = udp_addr[:udp_addr.rfind(":")]
+        yield cfg.name, ip_addr
+
+
+def median(values, default=0):
+    values = sorted(values)
+    if not values:
+        return default
+    n = len(values)
+    i = n//2
+    if n % 2:
+        return values[i]
+    m1, m2 = values[i], values[i-1]
+    return (m1 + m2) / 2
+
+
+def main(argv=None):
+    args = Args.parse(argv)
+
+    targets = {addr: name for name, addr in read_configuration(getattr(args, "src-dir"))}
+    if not targets:
+        print("no targets", file=sys.stderr)
+        return 10
+
+    pongs = icmplib.multiping(
+        list(targets.keys()),
+        count=args.count,
+        interval=args.interval,
+        timeout=args.timeout,
+        concurrent_tasks=args.concurrency,
+        privileged=False)
+
+    results = [(Result(status=Status.from_bool(p.is_alive), rtt=median(p.rtts)),
+                p.address,
+                targets[p.address])
+               for p in pongs]
+    results.sort(key=itemgetter(0))
+    for r in results:
+        print(*r, sep="\t")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
