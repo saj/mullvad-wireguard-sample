@@ -25,7 +25,7 @@ argv = [
     "src", "dst"]
 
 print(" ".join(shlex.quote(a) for a in argv), file=sys.stderr)
-sys.stderr.flush()
 
 rm_fr("dst")
+sys.stderr.flush()
 os.execv(PROG, argv)
