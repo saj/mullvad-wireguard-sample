@@ -90,7 +90,7 @@ class Args:
     def _natural_int(v):
         v = int(v)
         if v < 0:
-            raise ValueError("expected a non-negative integer: {v!r}")
+            raise ValueError(f"expected a non-negative integer: {v!r}")
         return v
 
     @staticmethod
@@ -98,7 +98,7 @@ class Args:
     def _positive_int(v):
         v = int(v)
         if v <= 0:
-            raise ValueError("expected a positive integer: {v!r}")
+            raise ValueError(f"expected a positive integer: {v!r}")
         return v
 
     @staticmethod
@@ -106,9 +106,9 @@ class Args:
     def _positive_float(v):
         v = float(v)
         if v <= 0:
-            raise ValueError("expected a positive float: {v!r}")
+            raise ValueError(f"expected a positive float: {v!r}")
         if math.isinf(v) or math.isnan(v):
-            raise ValueError("cannot accept extreme floating point value: {v!r}")
+            raise ValueError(f"cannot accept extreme floating point value: {v!r}")
         return v
 
     class _ArgparseFormatter(argparse.RawDescriptionHelpFormatter,
