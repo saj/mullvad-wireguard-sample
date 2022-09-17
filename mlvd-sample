@@ -42,11 +42,13 @@ import os.path
 import random
 import re
 import sys
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from functools import lru_cache, partial
 from operator import attrgetter
 
+cache  = lru_cache(maxsize=None)
 ichain = itertools.chain.from_iterable
 
 
@@ -65,14 +67,14 @@ class Args:
             help="Directory from which upstream Mullvad .conf files are read.")
         parser.add_argument(
             "dst-dir",
-            help="Directory to which output is written.  Without -f, it is an "
-            "error if the directory exists.")
+            help="Directory to which output is written.  "
+            "Without -f, it is an error if the directory exists.")
         parser.add_argument("-v", "--verbose", action="store_true")
         parser.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
         parser.add_argument(
             "-f", "--force", action="store_true",
-            help="Proceed even if dst-dir is found to exist.  Any existing "
-            "files in the destination directory are merged with new output.")
+            help="Proceed even if dst-dir is found to exist.  "
+            "Any existing files in the destination directory are merged with new output.")
         parser.add_argument(
             "-n", type=int, default=10,
             help="Maximum number of configuration files written to dst-dir.  "
@@ -80,37 +82,39 @@ class Args:
             "Specify a non-positive value to disable this limit.")
         parser.add_argument(
             "--seed", type=int, default=0,
-            help="Deterministic seed for the PRNG.  By default, every "
-            "invocation produces a unique sample.")
-        region_group = parser.add_mutually_exclusive_group()
-        region_group.add_argument(
-            "--select-region", dest="select_regions", type=cls._region_count,
-            action="append", default=[], metavar="REGION-COUNT",
-            help="Select servers from a specific region.  Implicitly excludes "
-            "all other servers.  May be supplied more than once:  a server is "
-            "selected if its region matches any REGION.  REGION-COUNT must be "
-            "of form RR:N where RR is a Mullvad region code -- usually an ISO "
-            "3166-1 alpha-2 code -- and N is a positive integer that specifies "
-            "the maximum number of servers to select from that region.  "
-            "e.g.: us:3")
-        region_group.add_argument(
-            "--reject-region", dest="reject_regions", type=cls._region,
-            action="append", default=[], metavar="REGION",
-            help="Reject all servers from a specific region.  May be supplied "
-            "more than once.")
+            help="Deterministic seed for the PRNG.  "
+            "By default, every invocation produces a unique sample.")
+        cc_group = parser.add_mutually_exclusive_group()
+        cc_group.add_argument(
+            "--select-country", dest="select_countries", type=cls._country_count,
+            action="append", default=[], metavar="COUNTRY-COUNT",
+            help="Select servers from a specific country.  "
+            "Implicitly excludes all other servers.  "
+            "May be supplied more than once:  "
+            "a server is selected if its country of origin matches any COUNTRY.  "
+            "COUNTRY-COUNT must be of form CC:N where "
+            "CC is a Mullvad country code -- usually an ISO 3166-1 alpha-2 code -- "
+            "and N is a positive integer that specifies the maximum number of "
+            "servers to select from that country.  e.g.: us:3")
+        cc_group.add_argument(
+            "--reject-country", dest="reject_countries", type=cls._country,
+            action="append", default=[], metavar="COUNTRY",
+            help="Reject all servers from a specific country.  "
+            "May be supplied more than once.")
         parser.add_argument(
             "--prefer-server", dest="prefer_servers", type=cls._server_id,
             action="append", default=[], metavar="SERVERID",
-            help="Assign a higher priority to a server when sampling.  Targets "
-            "are more likely to be selected.  May be supplied more than once.  "
-            "SERVERID must be of form RRNN, where RR is a Mullvad region code "
-            "and NN is an ordinal instance index.  Leading zeroes in NN are "
-            "permitted but are not significant.  e.g.: us080")
+            help="Assign a higher priority to a server when sampling.  "
+            "Targets are more likely to be selected.  "
+            "May be supplied more than once.  "
+            "SERVERID accepts forms like 'us80' and 'de-fra-wg-101'.  "
+            "Leading zeroes in the ordinal index are permitted but are not significant.")
         parser.add_argument(
             "--shun-server", dest="shun_servers", type=cls._server_id,
             action="append", default=[], metavar="SERVERID",
-            help="Assign a lower priority to a server when sampling.  Targets "
-            "are less likely to be selected.  May be supplied more than once.")
+            help="Assign a lower priority to a server when sampling.  "
+            "Targets are less likely to be selected.  "
+            "May be supplied more than once.")
         parser.add_argument(
             "--basename-prefix", default=DEFAULT_BASENAME_PREFIX,
             metavar="PREFIX",
@@ -118,36 +122,38 @@ class Args:
         parser.add_argument(
             "--rename", dest="renames", type=cls._server_id_name,
             action="append", default=[], metavar="SERVERID-NAME",
-            help="Rename the configuration file for a given SERVERID.  May be "
-            "supplied more than once, each flag with a different SERVERID.  "
-            "SERVERID-NAME must be of form RRNN:NAME where RRNN is as "
-            "described above, and NAME is the desired file name.  NAME may be "
-            "composed of any alpha-numeric character, the hyphen (-), or the "
-            "underscore (_).  PREFIX is implicitly prepended (and '.conf' "
-            "implicitly appended) to form the complete name of the generated "
-            "file.  e.g.: au01:au001-syd-intergrid")
+            help="Rename the configuration file for a given SERVERID.  "
+            "May be supplied more than once, each flag with a different SERVERID.  "
+            "SERVERID-NAME must be of form SERVERID:NAME where "
+            "SERVERID is as described above, and NAME is the desired file name.  "
+            "NAME may be composed of any alpha-numeric character, "
+            "the hyphen-minus (-), or the underscore (_).  "
+            "NAME may not begin nor end with a hyphen-minus or an underscore.  "
+            "PREFIX is implicitly prepended (and '.conf' implicitly appended) "
+            "to form the complete name of the generated file.  "
+            "e.g.: au01:au001-syd-intergrid")
         parser.add_argument(
             "--cfg-address", metavar="ADDR",
             help="Override Interface.Address from the source WireGuard "
-            "configuration with an alternative constant value.  Value should "
-            "be a comma separated list of IP addresses with prefix length.")
+            "configuration with an alternative constant value.  "
+            "Value should be a comma separated list of IP addresses with prefix length.")
         parser.add_argument(
             "--cfg-dns", metavar="DNSADDR",
             help="Override Interface.DNS from the source WireGuard "
-            "configuration with an alternative constant value.  Value should "
-            "be a comma separated list of IP addresses.")
+            "configuration with an alternative constant value.  "
+            "Value should be a comma separated list of IP addresses.")
         parser.add_argument(
             "--cfg-private-key", metavar="PRIVATEKEY",
             help="Override Interface.PrivateKey from the source WireGuard "
-            "configuration with an alternative constant value.  Value should "
-            "be a base64 encoded WireGuard private key.")
+            "configuration with an alternative constant value.  "
+            "Value should be a base64 encoded WireGuard private key.")
         args = parser.parse_args(argv[1:])
 
-        select_regions_dupes = find_dupes([rc.region for rc in args.select_regions])
-        if select_regions_dupes:
+        select_countries_dupes = find_dupes([cc.country for cc in args.select_countries])
+        if select_countries_dupes:
             parser.error(
-                "--select-regions: duplicate regions: {}"
-                .format(cjoin(sorted(select_regions_dupes))))
+                "--select-countries: duplicate countries: {}"
+                .format(cjoin(sorted(select_countries_dupes))))
 
         prefer_shun_conflicts = set(args.prefer_servers) & set(args.shun_servers)
         if prefer_shun_conflicts:
@@ -170,12 +176,12 @@ class Args:
         return getattr(self._args, name)
 
     @classmethod
-    def _region(cls, s):
-        return cls._parse_as_type(Region, s)
+    def _country(cls, s):
+        return cls._parse_as_type(Country, s)
 
     @classmethod
-    def _region_count(cls, s):
-        return cls._parse_as_type(RegionCount, s)
+    def _country_count(cls, s):
+        return cls._parse_as_type(CountryCount, s)
 
     @classmethod
     def _server_id(cls, s):
@@ -211,72 +217,85 @@ class Error(Exception):
     pass
 
 
-class Region(str):
+class Country(str):
 
-    _RE = re.compile(r"(?P<region>[A-Za-z]+)", flags=re.ASCII)
+    _RE = re.compile(r"(?P<country>[a-z]{2})", flags=re.ASCII)
 
     @classmethod
     def parse(cls, s):
-        m = cls._RE.fullmatch(s)
-        if not m:
-            raise ValueError(f"invalid region: {s!r}")
-        return cls(m["region"].lower())
+        country, suffix = cls._split(s)
+        if suffix:
+            raise ValueError(f"invalid country code: superfluous suffix: {suffix!r}")
+        return cls(country)
 
     @classmethod
-    def parse_partial(cls, s):
+    def parse_prefix(cls, s):
+        country, suffix = cls._split(s)
+        return cls(country), suffix
+
+    @classmethod
+    def _split(cls, s):
         m = cls._RE.match(s)
         if not m:
-            raise ValueError(f"invalid region: {s!r}")
-        return cls(m["region"].lower()), s[m.end(1):]
+            raise ValueError(f"invalid country code: {s!r}")
+        return m["country"].lower(), s[m.end(1):]
 
 
 @dataclass(frozen=True)
-class RegionCount:
-    region: Region
-    count:  int
-
-    # prefixed with Region
-    _RE = re.compile(r":(?P<count>\d+)", flags=re.ASCII)
+class CountryCount:
+    country: Country
+    count:   int
 
     @classmethod
     def parse(cls, s):
-        region, rest = Region.parse_partial(s)
-        m = cls._RE.fullmatch(rest)
-        if not m:
-            raise ValueError(f"invalid region-count: {s!r}")
-        return cls(region=region, count=int(m["count"]))
+        try:
+            i = s.rindex(":")
+        except ValueError as exc:
+            raise ValueError(f"invalid country-count: {s!r}: {exc}") from None
+        try:
+            c = int(s[i+1:])
+        except ValueError as exc:
+            raise ValueError(f"invalid country-count: {s!r}: {exc}") from None
+        return cls(country=Country.parse(s[:i]), count=c)
 
 
 @dataclass(frozen=True, order=True)
 class ServerID:
-    region:   Region
-    instance: int
-
-    # prefixed with Region
-    _RE = re.compile(r"(?P<instance>\d+)", flags=re.ASCII)
+    country: Country
+    city:    str
+    index:   int
 
     @classmethod
     def parse(cls, s):
-        region, rest = Region.parse_partial(s)
-        m = cls._RE.fullmatch(rest)
-        if not m:
-            raise ValueError(f"invalid server ID: {s!r}")
-        return cls(region=region, instance=int(m["instance"]))
+        # s may be of form 'se27' or 'de-fra-wg-304'
+        # The latter form was introduced around Q3 2022.
 
-    @classmethod
-    def parse_partial(cls, s):
-        region, rest = Region.parse_partial(s)
-        m = cls._RE.match(rest)
-        if not m:
-            raise ValueError(f"invalid server ID: {s!r}")
-        return cls(region=region, instance=int(m["instance"])), rest[m.end(1):]
+        country, suffix = Country.parse_prefix(s)
+
+        parts = []
+        index = 0
+        for category, substr in split_string_by_category(suffix.lower()):
+            if category not in ("Ll"    # lowercase letter
+                                "Nd"):  # decimal number
+                continue
+            if substr == "wg":
+                continue
+            if category == "Nd":
+                index = int(substr)
+                break
+            parts.append(substr)
+        city = "-".join(parts)
+
+        return cls(country=country, city=city, index=index)
 
     def __str__(self):
-        return f"{self.region}{self._instance_zfill}"
+        if self.city:
+            return f"{self.country}-{self.city}-{self._index_zfill}"
+        return f"{self.country}{self._index_zfill}"
 
     @property
-    def _instance_zfill(self):
-        return str(self.instance).zfill(3)
+    def _index_zfill(self):
+        return str(self.index).zfill(3)
 
 
 @dataclass(frozen=True, order=True)
@@ -296,37 +315,25 @@ class ServerIDName:
     sid:  ServerID
     name: str
 
-    # prefixed with ServerID
-    _RE = re.compile(r":(?P<name>[\w-]+)")
+    _RE = re.compile(r"[a-z0-9](?:[_-]*[a-z0-9]+)*", flags=(re.ASCII | re.I))
 
     @classmethod
     def parse(cls, s):
-        sid, rest = ServerID.parse_partial(s)
-        m = cls._RE.fullmatch(rest)
+        try:
+            i = s.rindex(":")
+        except ValueError as exc:
+            raise ValueError(f"invalid serverid-name: {s!r}: {exc}") from None
+        name = s[i+1:]
+        m = cls._RE.fullmatch(name)
         if not m:
-            raise ValueError(f"invalid name: {s!r}")
-        return cls(sid=sid, name=m["name"])
+            raise ValueError(f"invalid serverid-name: {s!r}")
+        return cls(sid=ServerID.parse(s[:i]), name=name)
 
 
 @dataclass(frozen=True)
 class Configuration:
     path: str
     sid:  ServerID
-
-    _PREFIX     = "mullvad-"
-    _PREFIX_LEN = len(_PREFIX)
-    _SUFFIX     = ".conf"
-    _SUFFIX_LEN = len(_SUFFIX)
-
-    @classmethod
-    def match(cls, path):
-        basename = os.path.basename(path)
-        if not basename.startswith(cls._PREFIX):
-            return None
-        if not basename.endswith(cls._SUFFIX):
-            return None
-        sid = ServerID.parse(basename[cls._PREFIX_LEN:-cls._SUFFIX_LEN])
-        return cls(path=path, sid=sid)
 
     def basename(self, prefix=DEFAULT_BASENAME_PREFIX, suffix=None):
         if not suffix:
@@ -343,20 +350,20 @@ class Configuration:
 class PriorityCache:
 
     def __init__(self):
-        self._by_region = {}
+        self._by_country   = {}
         self._by_server_id = {}
 
     def lookup(self, server_id):
-        prios = [self._by_server_id.get(server_id),
-                 self._by_region.get(server_id.region),
-                 PRIO_DEFAULT]
-        return next(p for p in prios if p)
+        return next(p for p in (self._by_server_id.get(server_id),
+                                self._by_country.get(server_id.country),
+                                PRIO_DEFAULT)
+                    if p)
 
-    def shun_region(self, region):
-        self._by_region[region] = PRIO_SHUN
+    def shun_country(self, country):
+        self._by_country[country] = PRIO_SHUN
 
-    def prefer_region(self, region):
-        self._by_region[region] = PRIO_PREFER
+    def prefer_country(self, country):
+        self._by_country[country] = PRIO_PREFER
 
     def shun_server_id(self, server_id):
         self._by_server_id[server_id] = PRIO_SHUN
@@ -422,6 +429,22 @@ def find_dupes(iterable):
     return [v for v, c in Counter(iterable).items() if c > 1]
 
 
+def removeprefix(s, prefix):
+    if s.startswith(prefix):
+        return s[len(prefix):]
+    return s
+
+
+def removesuffix(s, suffix):
+    if s.endswith(suffix):
+        return s[:-len(suffix)]
+    return s
+
+
+def split_string_by_category(s):
+    return ((category, "".join(g)) for category, g in itertools.groupby(s, unicodedata.category))
+
+
 def cjoin(iterable):
     return ", ".join(iterable)
 
@@ -467,11 +490,11 @@ def sample_by_priority(maxlen):
     return sampler
 
 
-def sample_by_region(regions):
-    def sampler(region, l):
-        if region not in regions:
+def sample_by_country(countries):
+    def sampler(country, l):
+        if country not in countries:
             return []
-        maxlen = regions[region]
+        maxlen = countries[country]
         if len(l) <= maxlen:
             return l
         psampler = sample_by_priority(maxlen)
@@ -479,21 +502,35 @@ def sample_by_region(regions):
     return sampler
 
 
+def server_id_from_path(path):
+    base = os.path.basename(path)
+    if not base.endswith(".conf"):
+        raise ValueError("file name missing .conf extension")
+
+    name = compose(base[:-len(".conf")],
+                   partial(removeprefix, prefix="mullvad-"),
+                   partial(removesuffix, suffix="-wireguard"))
+    return ServerID.parse(name)
+
+
 def find_configuration(src_dir):
     for name in os.listdir(src_dir):
         src_path = os.path.join(src_dir, name)
         if not os.path.isfile(src_path):
             continue
-        c = Configuration.match(src_path)
-        if not c:
+        try:
+            sid = server_id_from_path(src_path)
+        except ValueError as exc:
+            LOGGER.warning("%s: %s (skipped)", src_path, exc)
             continue
-        yield c
+        yield Configuration(path=src_path, sid=sid)
 
 
 def main(argv=None):
 
     # pylint: disable=too-many-branches
     # pylint: disable=too-many-locals
+    # pylint: disable=too-many-statements
 
     args = Args.parse(argv)
 
@@ -505,7 +542,7 @@ def main(argv=None):
     groupers   = []  #           over ServerIDPrioritised values
     transforms = {}  # sid -> transform, else TRANSFORMS.default
 
-    @lru_cache(maxsize=None)
+    @cache
     def transform(cfg):
         try:
             t = transforms[cfg.sid]
@@ -513,15 +550,15 @@ def main(argv=None):
             t = TRANSFORMS.default()
         return t(cfg)
 
-    if args.select_regions:
-        select_regions = {sr.region for sr in args.select_regions}
-        filters.append(lambda psid: psid.region in select_regions)
+    if args.select_countries:
+        select_countries = {cc.country for cc in args.select_countries}
+        filters.append(lambda psid: psid.country in select_countries)
         groupers.append(make_grouper(
-            lambda psid: psid.region,
-            sample_by_region({sr.region: sr.count for sr in args.select_regions})))
-    elif args.reject_regions:
-        reject_regions = set(args.reject_regions)
-        filters.append(lambda psid: psid.region not in reject_regions)
+            lambda psid: psid.country,
+            sample_by_country({cc.country: cc.count for cc in args.select_countries})))
+    elif args.reject_countries:
+        reject_countries = set(args.reject_countries)
+        filters.append(lambda psid: psid.country not in reject_countries)
     if args.n > 0:
         groupers.append(make_grouper(
             lambda psid: 0,  # no-op sort/group key
@@ -576,6 +613,7 @@ def main(argv=None):
             raise Error("refused to clobber existing destination directory: {} "
                         "(supply -f/--force to disregard)"
                         .format(getattr(args, "dst-dir"))) from None
+
     for psid in psids:
         basename, data = transform(cfgs[psid.sid])
         path = os.path.join(getattr(args, "dst-dir"), basename)
