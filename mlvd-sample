@@ -116,6 +116,11 @@ class Args:
             "Targets are less likely to be selected.  "
             "May be supplied more than once.")
         parser.add_argument(
+            "--reject-server", dest="reject_servers", type=cls._server_id,
+            action="append", default=[], metavar="SERVERID",
+            help="Reject a server.  Stronger than --shun-server.  "
+            "May be supplied more than once.")
+        parser.add_argument(
             "--basename-prefix", default=DEFAULT_BASENAME_PREFIX,
             metavar="PREFIX",
             help="Common prefix for all generated file names.")
@@ -559,6 +564,9 @@ def main(argv=None):
     elif args.reject_countries:
         reject_countries = set(args.reject_countries)
         filters.append(lambda psid: psid.country not in reject_countries)
+    if args.reject_servers:
+        reject_servers = set(args.reject_servers)
+        filters.append(lambda psid: psid not in reject_servers)
     if args.n > 0:
         groupers.append(make_grouper(
             lambda psid: 0,  # no-op sort/group key
