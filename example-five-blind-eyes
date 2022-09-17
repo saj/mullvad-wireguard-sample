@@ -21,7 +21,7 @@ PROG = "./mlvd-sample"
 
 argv = [
     PROG, "-v",
-    *ichain(["--reject-region", r] for r in ["au", "ca", "gb", "nz", "us"]),
+    *ichain(["--reject-country", r] for r in ["au", "ca", "gb", "nz", "us"]),
     "src", "dst"]
 
 print(" ".join(shlex.quote(a) for a in argv), file=sys.stderr)
