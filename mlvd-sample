@@ -42,7 +42,6 @@ import os.path
 import random
 import re
 import sys
-import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from functools import lru_cache, partial
@@ -87,19 +86,36 @@ class Args:
         cc_group = parser.add_mutually_exclusive_group()
         cc_group.add_argument(
             "--select-country", dest="select_countries", type=cls._country_count,
-            action="append", default=[], metavar="COUNTRY-COUNT",
+            action="append", default=[], metavar="COUNTRY:COUNT",
             help="Select servers from a specific country.  "
-            "Implicitly excludes all other servers.  "
+            "Implicitly excludes servers from other countries.  "
             "May be supplied more than once:  "
             "a server is selected if its country of origin matches any COUNTRY.  "
-            "COUNTRY-COUNT must be of form CC:N where "
-            "CC is a Mullvad country code -- usually an ISO 3166-1 alpha-2 code -- "
-            "and N is a positive integer that specifies the maximum number of "
+            "COUNTRY is a Mullvad country code, usually an ISO 3166-1 alpha-2 code.  "
+            "COUNT is a positive integer that specifies the maximum number of "
             "servers to select from that country.  e.g.: us:3")
         cc_group.add_argument(
             "--reject-country", dest="reject_countries", type=cls._country,
             action="append", default=[], metavar="COUNTRY",
-            help="Reject all servers from a specific country.  "
+            help="Reject all servers from a country.  "
+            "May be supplied more than once.")
+        parser.add_argument(
+            "--prefer-city", dest="prefer_cities", type=cls._city,
+            action="append", default=[], metavar="CITY",
+            help="Assign a higher priority to a city when sampling.  "
+            "Targets are more likely to be selected.  "
+            "May be supplied more than once.  "
+            "CITY is of form 'fra', 'hkg', 'sea', etc.  ")
+        parser.add_argument(
+            "--shun-city", dest="shun_cities", type=cls._city,
+            action="append", default=[], metavar="CITY",
+            help="Assign a lower priority to a city when sampling.  "
+            "Targets are less likely to be selected.  "
+            "May be supplied more than once.")
+        parser.add_argument(
+            "--reject-city", dest="reject_cities", type=cls._city,
+            action="append", default=[], metavar="CITY",
+            help="Reject a city.  Stronger than --shun-city.  "
             "May be supplied more than once.")
         parser.add_argument(
             "--prefer-server", dest="prefer_servers", type=cls._server_id,
@@ -107,7 +123,7 @@ class Args:
             help="Assign a higher priority to a server when sampling.  "
             "Targets are more likely to be selected.  "
             "May be supplied more than once.  "
-            "SERVERID accepts forms like 'us80' and 'de-fra-wg-101'.  "
+            "SERVERID is of form 'de-fra-wg-101'.  "
             "Leading zeroes in the ordinal index are permitted but are not significant.")
         parser.add_argument(
             "--shun-server", dest="shun_servers", type=cls._server_id,
@@ -126,17 +142,15 @@ class Args:
             help="Common prefix for all generated file names.")
         parser.add_argument(
             "--rename", dest="renames", type=cls._server_id_name,
-            action="append", default=[], metavar="SERVERID-NAME",
+            action="append", default=[], metavar="SERVERID:NAME",
             help="Rename the configuration file for a given SERVERID.  "
             "May be supplied more than once, each flag with a different SERVERID.  "
-            "SERVERID-NAME must be of form SERVERID:NAME where "
-            "SERVERID is as described above, and NAME is the desired file name.  "
+            "SERVERID is as described above.  NAME is the desired file name.  "
             "NAME may be composed of any alpha-numeric character, "
             "the hyphen-minus (-), or the underscore (_).  "
             "NAME may not begin nor end with a hyphen-minus or an underscore.  "
-            "PREFIX is implicitly prepended (and '.conf' implicitly appended) "
-            "to form the complete name of the generated file.  "
-            "e.g.: au01:au001-syd-intergrid")
+            "PREFIX is implicitly prepended, and '.conf' implicitly appended, "
+            "to form the complete name of the generated file.  ")
         parser.add_argument(
             "--cfg-address", metavar="ADDR",
             help="Override Interface.Address from the source WireGuard "
@@ -160,11 +174,17 @@ class Args:
                 "--select-countries: duplicate countries: {}"
                 .format(cjoin(sorted(select_countries_dupes))))
 
-        prefer_shun_conflicts = set(args.prefer_servers) & set(args.shun_servers)
-        if prefer_shun_conflicts:
+        city_prefer_shun_conflicts = set(args.prefer_cities) & set(args.shun_cities)
+        if city_prefer_shun_conflicts:
+            parser.error(
+                "cities cannot be preferred and shunned simultaneously: {}"
+                .format(cjoin(sorted(str(cid) for cid in city_prefer_shun_conflicts))))
+
+        server_id_prefer_shun_conflicts = set(args.prefer_servers) & set(args.shun_servers)
+        if server_id_prefer_shun_conflicts:
             parser.error(
                 "server IDs cannot be preferred and shunned simultaneously: {}"
-                .format(cjoin(sorted(str(sid) for sid in prefer_shun_conflicts))))
+                .format(cjoin(sorted(str(sid) for sid in server_id_prefer_shun_conflicts))))
 
         renames_dupes = find_dupes([sidn.sid for sidn in args.renames])
         if renames_dupes:
@@ -187,6 +207,10 @@ class Args:
     @classmethod
     def _country_count(cls, s):
         return cls._parse_as_type(CountryCount, s)
+
+    @classmethod
+    def _city(cls, s):
+        return cls._parse_as_type(City, s)
 
     @classmethod
     def _server_id(cls, s):
@@ -264,39 +288,49 @@ class CountryCount:
         return cls(country=Country.parse(s[:i]), count=c)
 
 
+class City(str):
+
+    _RE = re.compile(r"(?P<city>[a-z]{3})", flags=re.ASCII)
+
+    @classmethod
+    def parse(cls, s):
+        city, suffix = cls._split(s)
+        if suffix:
+            raise ValueError(f"invalid city code: superfluous suffix: {suffix!r}")
+        return cls(city)
+
+    @classmethod
+    def parse_prefix(cls, s):
+        city, suffix = cls._split(s)
+        return cls(city), suffix
+
+    @classmethod
+    def _split(cls, s):
+        m = cls._RE.match(s)
+        if not m:
+            raise ValueError(f"invalid city code: {s!r}")
+        return m["city"].lower(), s[m.end(1):]
+
+
 @dataclass(frozen=True, order=True)
 class ServerID:
     country: Country
-    city:    str
+    city:    City
     index:   int
 
     @classmethod
     def parse(cls, s):
-        # s may be of form 'se27' or 'de-fra-wg-304'
-        # The latter form was introduced around Q3 2022.
+        # s is of form 'de-fra-wg-304'
 
         country, suffix = Country.parse_prefix(s)
-
-        parts = []
-        index = 0
-        for category, substr in split_string_by_category(suffix.lower()):
-            if category not in ("Ll"    # lowercase letter
-                                "Nd"):  # decimal number
-                continue
-            if substr == "wg":
-                continue
-            if category == "Nd":
-                index = int(substr)
-                break
-            parts.append(substr)
-        city = "-".join(parts)
+        city,    suffix = City.parse_prefix(suffix[1:])
+        suffix = removeprefix(suffix, "-wg-")
+        index  = int(suffix)
 
         return cls(country=country, city=city, index=index)
 
     def __str__(self):
-        if self.city:
-            return f"{self.country}-{self.city}-{self._index_zfill}"
-        return f"{self.country}{self._index_zfill}"
+        return f"{self.country}-{self.city}-{self._index_zfill}"
 
     @property
     def _index_zfill(self):
@@ -320,7 +354,7 @@ class ServerIDName:
     sid:  ServerID
     name: str
 
-    _RE = re.compile(r"[a-z0-9](?:[_-]*[a-z0-9]+)*", flags=(re.ASCII | re.I))
+    _RE = re.compile(r"[a-z0-9](?:[_-]*[a-z0-9]+)*", flags=re.ASCII|re.I)
 
     @classmethod
     def parse(cls, s):
@@ -356,12 +390,15 @@ class PriorityCache:
 
     def __init__(self):
         self._by_country   = {}
+        self._by_city      = {}
         self._by_server_id = {}
 
     def lookup(self, server_id):
-        return next(p for p in (self._by_server_id.get(server_id),
-                                self._by_country.get(server_id.country),
-                                PRIO_DEFAULT)
+        return next(p for p
+                    in (self._by_server_id.get(server_id),
+                        self._by_city.get(server_id.city),
+                        self._by_country.get(server_id.country),
+                        PRIO_DEFAULT)
                     if p)
 
     def shun_country(self, country):
@@ -369,6 +406,12 @@ class PriorityCache:
 
     def prefer_country(self, country):
         self._by_country[country] = PRIO_PREFER
+
+    def shun_city(self, city):
+        self._by_city[city] = PRIO_SHUN
+
+    def prefer_city(self, city):
+        self._by_city[city] = PRIO_PREFER
 
     def shun_server_id(self, server_id):
         self._by_server_id[server_id] = PRIO_SHUN
@@ -444,10 +487,6 @@ def removesuffix(s, suffix):
     if s.endswith(suffix):
         return s[:-len(suffix)]
     return s
-
-
-def split_string_by_category(s):
-    return ((category, "".join(g)) for category, g in itertools.groupby(s, unicodedata.category))
 
 
 def cjoin(iterable):
@@ -582,6 +621,10 @@ def main(argv=None):
         transforms[rename.sid] = TRANSFORMS.rename(rename.name)
 
     prioc = PriorityCache()
+    for cid in args.shun_cities:
+        prioc.shun_city(cid)
+    for cid in args.prefer_cities:
+        prioc.prefer_city(cid)
     for sid in args.shun_servers:
         prioc.shun_server_id(sid)
     for sid in args.prefer_servers:
