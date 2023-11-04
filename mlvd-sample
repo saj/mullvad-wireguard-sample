@@ -11,7 +11,7 @@ to be imported en masse into the WireGuard clients for Android, iOS, and macOS.
 
 Navigate to the Mullvad WireGuard configuration file generator:
 
-https://mullvad.net/en/account/#/wireguard-config/
+https://mullvad.net/en/account/wireguard-config
 
 Plug in your Mullvad WireGuard private key.  Select 'All countries'.  Click the
 'Download zip archive' button.  Unpack the archive somewhere on your filesystem;
