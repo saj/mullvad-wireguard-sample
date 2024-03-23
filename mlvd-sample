@@ -605,11 +605,12 @@ def main(argv=None):
         filters.append(lambda psid: psid.country not in reject_countries)
     if args.reject_servers:
         reject_servers = set(args.reject_servers)
-        filters.append(lambda psid: psid not in reject_servers)
+        filters.append(lambda psid: psid.sid not in reject_servers)
     if args.n > 0:
         groupers.append(make_grouper(
             lambda psid: 0,  # no-op sort/group key
             sample_by_priority(args.n)))
+
     TRANSFORMS.basename_prefix = args.basename_prefix
     if args.cfg_address:
         TRANSFORMS.address = args.cfg_address
