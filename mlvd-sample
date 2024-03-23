@@ -603,6 +603,9 @@ def main(argv=None):
     elif args.reject_countries:
         reject_countries = set(args.reject_countries)
         filters.append(lambda psid: psid.country not in reject_countries)
+    if args.reject_cities:
+        reject_cities = set(args.reject_cities)
+        filters.append(lambda psid: psid.city not in reject_cities)
     if args.reject_servers:
         reject_servers = set(args.reject_servers)
         filters.append(lambda psid: psid.sid not in reject_servers)
